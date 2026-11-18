@@ -164,3 +164,26 @@ curl -X POST http://localhost:5000/admin/keys -H "X-Admin-Token: <token>" \
 - `alternatives` (luôn trả mảng rỗng) — cần beam search
 - `/suggest` (trả 403)
 - Dịch PDF, ODT, EPUB
+
+## Publish lên IIS
+1. Cài ASP.NET Core Hosting Bundle 10 lên server, sau đó chạy iisreset.
+
+2. Build trên máy dev:
+```
+cd web; 
+npm ci; 
+npm run build; 
+cd ..
+dotnet publish src/NetTranslate.Api/NetTranslate.Api.csproj -c Release -r win-x64 --self-contained -o publish/iis
+```
+3. Copy lên server
+- Copy publish/iis vào site directory, 
+- copy thư mục models vào <site directory>\data\models.
+- Sau đó tạo file appsettings.Production.json để khai báo đường dẫn DB, models, files và Admin token.
+4. Tạo app pool NetTranslate (No Managed Code, AlwaysRunning, idle timeout = 0), rồi tạo site NetTranslate với binding cho translate.adgps.vn. Thêm một binding nữa cho translateapi.adgps.vn trên cùng site đó.
+5. Cấp quyền ghi cho app pool:
+```	
+	icacls C:\inetpub\nettranslate-data /grant "IIS AppPool\NetTranslate:(OI)(CI)M"
+```
+6. Trỏ DNS của 2 tên miền về server, binding.
+7. Kiểm tra lần lượt https://translate.adgps.vn, https://translateapi.adgps.vn/languages và https://translateapi.adgps.vn/scalar/v1.
