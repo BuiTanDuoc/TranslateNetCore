@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -75,6 +76,7 @@ public sealed partial class HuggingFaceModelInstaller : IModelInstaller, IDispos
         }
     }
 
+    private readonly IMemoryCache _cache;
     private readonly IHttpClientFactory _httpFactory;
     private readonly ITranslationEngine _engine;
     private readonly ILogger<HuggingFaceModelInstaller> _logger;
@@ -90,8 +92,10 @@ public sealed partial class HuggingFaceModelInstaller : IModelInstaller, IDispos
         IOptions<ModelOptions> options,
         IHostEnvironment environment,
         IHostApplicationLifetime lifetime,
+        IMemoryCache cache,
         ILogger<HuggingFaceModelInstaller> logger)
     {
+        _cache = cache;
         _httpFactory = httpFactory;
         _engine = engine;
         _logger = logger;
@@ -107,9 +111,7 @@ public sealed partial class HuggingFaceModelInstaller : IModelInstaller, IDispos
 
     public ModelDownloadStatus Start(ModelDownloadRequest request)
     {
-        var pair = (request.Pair ?? string.Empty).Trim().ToLowerInvariant();
-        if (!PairRegex().IsMatch(pair))
-            throw new ValidationException("Invalid language pair. Use the format 'en-vi' (2-3 letter codes).");
+        var pair = NormalizePair(request.Pair);
 
         var repo = string.IsNullOrWhiteSpace(request.Repo) ? $"Xenova/opus-mt-{pair}" : request.Repo.Trim();
         if (repo.StartsWith("https://huggingface.co/", StringComparison.OrdinalIgnoreCase))
@@ -195,6 +197,134 @@ public sealed partial class HuggingFaceModelInstaller : IModelInstaller, IDispos
         _logger.LogInformation("Deleted model folder {Dir}", dir);
     }
 
+    // ------------------------------------------------------------------ Search
+
+    private sealed record KnownRepo(string Repo, bool Recommended, string? Note, string? Warning = null, string? TargetPrefix = null);
+
+    /// <summary>Repo đã thử: luôn được đưa vào danh sách và xếp đầu (hoặc gắn cảnh báo).</summary>
+    private static readonly Dictionary<string, KnownRepo[]> KnownRepos = new(StringComparer.Ordinal)
+    {
+        ["en-ja"] = [new("Kadonox/fugumt-en-ja-onnx", true, "FuguMT (staka/fugumt-en-ja)")],
+        ["ja-en"] = [new("Xenova/opus-mt-ja-en", true, "Helsinki-NLP OPUS-MT")],
+        ["en-vi"] = [new("Xenova/opus-mt-en-vi", true, "Helsinki-NLP OPUS-MT")],
+        ["vi-en"] = [new("Xenova/opus-mt-vi-en", true, "Helsinki-NLP OPUS-MT")],
+        // opus-mt-en-zh có nhiều biến thể chữ Hán ở đầu ra → cần token chọn tiếng Trung giản thể
+        ["en-zh"] = [new("Xenova/opus-mt-en-zh", false, "Helsinki-NLP OPUS-MT, outputs several Chinese variants", TargetPrefix: ">>cmn_Hans<<")],
+    };
+
+    private const string JapWarning = "Trained only on Bible text (language code 'jap'), poor quality for general use.";
+
+    private const int MaxCandidatesChecked = 12;
+
+    public async Task<IReadOnlyList<ModelRepoCandidate>> SearchReposAsync(string pair, CancellationToken cancellationToken = default)
+    {
+        pair = NormalizePair(pair);
+        var cacheKey = "hf-repos:" + pair;
+        if (_cache.TryGetValue(cacheKey, out IReadOnlyList<ModelRepoCandidate>? cached) && cached is not null)
+            return cached;
+
+        var (source, target) = SplitPair(pair);
+        // Tên repo phải chứa đúng "src-tgt" (hoặc src_tgt) theo đúng chiều, không dính chữ cái hai bên
+        // → "en-ja" không khớp "ja-en" hay "en-jap"
+        var nameRegex = new Regex($"(?<![a-z]){Regex.Escape(source)}[-_]{Regex.Escape(target)}(?![a-z])",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        var known = KnownRepos.GetValueOrDefault(pair, []);
+        var downloads = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        var names = new List<string>();
+
+        void AddName(string repo)
+        {
+            if (!names.Contains(repo, StringComparer.OrdinalIgnoreCase)) names.Add(repo);
+        }
+
+        foreach (var k in known) AddName(k.Repo);
+        AddName($"Xenova/opus-mt-{pair}");
+
+        var url = $"{BaseUrl}/api/models?search={Uri.EscapeDataString(pair)}&filter=onnx&sort=downloads&direction=-1&limit=50";
+        using (var request = CreateRequest(url))
+        using (var response = await Http.SendAsync(request, cancellationToken))
+        {
+            if (!response.IsSuccessStatusCode)
+                throw new InvalidOperationException($"Hugging Face search failed: HTTP {(int)response.StatusCode}.");
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                var id = item.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
+                if (string.IsNullOrEmpty(id) || !RepoRegex().IsMatch(id)) continue;
+                if (item.TryGetProperty("downloads", out var d) && d.ValueKind == JsonValueKind.Number)
+                    downloads[id] = d.GetInt64();
+                if (nameRegex.IsMatch(id.Split('/')[1])) AddName(id);
+            }
+        }
+
+        // Kiểm tra song song từng repo: đủ file + là Marian
+        using var gate = new SemaphoreSlim(4);
+        var checks = names.Take(MaxCandidatesChecked).Select(async repo =>
+        {
+            await gate.WaitAsync(cancellationToken);
+            try { return await CheckRepoAsync(repo, cancellationToken); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("Skip repo {Repo}: {Message}", repo, ex.Message);
+                return null;
+            }
+            finally { gate.Release(); }
+        });
+        var checkedRepos = await Task.WhenAll(checks);
+
+        var result = checkedRepos
+            .Where(c => c is not null)
+            .Select(c =>
+            {
+                var info = known.FirstOrDefault(k => k.Repo.Equals(c!.Repo, StringComparison.OrdinalIgnoreCase));
+                var warning = info?.Warning ?? (source == "jap" || target == "jap" ? JapWarning : null);
+                return new ModelRepoCandidate(
+                    c!.Repo, c.FullBytes, c.QuantizedBytes,
+                    downloads.TryGetValue(c.Repo, out var n) ? n : null,
+                    info?.Recommended ?? false, info?.Note, warning, info?.TargetPrefix);
+            })
+            .OrderByDescending(c => c.Recommended)
+            .ThenBy(c => c.Warning is not null)
+            .ThenByDescending(c => c.Downloads ?? -1)
+            .ToList();
+
+        _cache.Set(cacheKey, (IReadOnlyList<ModelRepoCandidate>)result, TimeSpan.FromMinutes(10));
+        return result;
+    }
+
+    private sealed record RepoCheck(string Repo, long? FullBytes, long? QuantizedBytes);
+
+    private async Task<RepoCheck?> CheckRepoAsync(string repo, CancellationToken ct)
+    {
+        var tree = await ListRepoFilesAsync(repo, ct);
+        var full = BuildPlan(tree, quantized: false);
+        var quantized = BuildPlan(tree, quantized: true);
+        var hasQuantized = quantized.Any(f => f.LocalName.Contains("_quantized", StringComparison.Ordinal));
+        var hasFull = full.Any(f => f.LocalName == "encoder_model.onnx");
+
+        // Chỉ nhận model Marian (engine không chạy được NLLB, M2M100, T5...)
+        var configUrl = $"{BaseUrl}/{EscapePath(repo)}/resolve/main/config.json";
+        using var request = CreateRequest(configUrl);
+        using var response = await Http.SendAsync(request, ct);
+        if (!response.IsSuccessStatusCode) return null;
+        using var config = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        if (!config.RootElement.TryGetProperty("model_type", out var type)
+            || !string.Equals(type.GetString(), "marian", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return new RepoCheck(repo, hasFull ? full.Sum(f => f.Size) : null, hasQuantized ? quantized.Sum(f => f.Size) : null);
+    }
+
+    private static string NormalizePair(string? pair)
+    {
+        var normalized = (pair ?? string.Empty).Trim().ToLowerInvariant();
+        if (!PairRegex().IsMatch(normalized))
+            throw new ValidationException("Invalid language pair. Use the format 'en-vi' (2-3 letter codes).");
+        return normalized;
+    }
+
     // ------------------------------------------------------------------ Job
 
     private async Task RunAsync(Job job)
@@ -233,7 +363,7 @@ public sealed partial class HuggingFaceModelInstaller : IModelInstaller, IDispos
         }
         catch (Exception ex)
         {
-            job.Error = ex.Message;
+            job.Error = DescribeError(job, ex);
             job.State = "failed";
             _logger.LogWarning(ex, "Model download {Id} ({Repo}) failed", job.Id, job.Repo);
         }
@@ -566,6 +696,28 @@ public sealed partial class HuggingFaceModelInstaller : IModelInstaller, IDispos
     {
         var parts = pair.Split('-', 2);
         return (parts[0], parts[1]);
+    }
+
+    /// <summary>
+    /// Thông báo lỗi kèm inner exception (vd. "The SSL connection could not be established" → lý do thật bên trong)
+    /// và bước/file đang xử lý, để admin chẩn đoán được mà không cần đọc log server.
+    /// </summary>
+    private static string DescribeError(Job job, Exception ex)
+    {
+        var messages = new List<string>();
+        for (var e = ex; e is not null && messages.Count < 5; e = e.InnerException)
+            if (!string.IsNullOrWhiteSpace(e.Message) && !messages.Contains(e.Message))
+                messages.Add(e.Message.Trim());
+        var text = string.Join(" → ", messages);
+
+        if (ex is HttpRequestException or TimeoutException || ex.InnerException is HttpRequestException)
+        {
+            var file = job.Files.FirstOrDefault(f => f.State is "downloading" or "failed");
+            var step = file is null ? "listing repository files" : $"downloading '{file.RemotePath}'";
+            text = $"Network error while {step} from Hugging Face " +
+                   "(files are served from huggingface.co and CDN hosts such as cas-bridge.xethub.hf.co / cdn-lfs.hf.co): " + text;
+        }
+        return text;
     }
 
     private static bool LooksLikeHtml(ReadOnlySpan<byte> data)

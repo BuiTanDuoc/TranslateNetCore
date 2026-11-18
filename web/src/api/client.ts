@@ -76,6 +76,17 @@ export interface ModelDownloadStatus {
   files: { name: string; size: number; downloaded: number; state: string }[]
 }
 
+export interface ModelRepoCandidate {
+  repo: string
+  fullBytes: number | null
+  quantizedBytes: number | null
+  downloads: number | null
+  recommended: boolean
+  note: string | null
+  warning: string | null
+  targetPrefix: string | null
+}
+
 export interface ModelDownloadRequest {
   pair: string
   repo?: string
@@ -207,6 +218,12 @@ export const adminApi = {
       method: 'POST',
       headers: adminApi.headers(token, true),
       body: JSON.stringify(data),
+    }),
+
+  searchRepos: (token: string, pair: string, signal?: AbortSignal) =>
+    request<ModelRepoCandidate[]>(`/admin/models/repos?pair=${encodeURIComponent(pair)}`, {
+      headers: adminApi.headers(token),
+      signal,
     }),
 
   listDownloads: (token: string) =>

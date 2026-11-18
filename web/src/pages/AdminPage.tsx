@@ -8,6 +8,7 @@ import {
   type ModelDownloadState,
   type ModelDownloadStatus,
   type ModelInfo,
+  type ModelRepoCandidate,
 } from '../api/client'
 import { useI18n, type TKey } from '../lib/i18n'
 
@@ -341,14 +342,80 @@ function DownloadCard({ job, onCancel }: { job: ModelDownloadStatus; onCancel: (
   )
 }
 
-function AddModelForm({ disabled, onStart }: { disabled: boolean; onStart: (r: ModelDownloadRequest) => Promise<void> }) {
+const CUSTOM_REPO = '__custom__'
+
+function formatCount(n: number) {
+  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n)
+}
+
+function repoLabel(c: ModelRepoCandidate, t: (k: TKey) => string) {
+  const sizes = [c.fullBytes != null ? formatMb(c.fullBytes) : null, c.quantizedBytes != null ? `int8 ${formatMb(c.quantizedBytes)}` : null]
+    .filter(Boolean)
+    .join(' / ')
+  const downloads = c.downloads != null ? ` · ${formatCount(c.downloads)} ${t('downloadsShort')}` : ''
+  return `${c.recommended ? '★ ' : ''}${c.warning ? '⚠ ' : ''}${c.repo} (${sizes})${downloads}`
+}
+
+function AddModelForm({
+  token,
+  disabled,
+  onStart,
+}: {
+  token: string
+  disabled: boolean
+  onStart: (r: ModelDownloadRequest) => Promise<void>
+}) {
   const { t } = useI18n()
   const [pair, setPair] = useState('')
-  const [repo, setRepo] = useState('')
+  const [candidates, setCandidates] = useState<ModelRepoCandidate[] | null>(null)
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState('')
+  const [selected, setSelected] = useState('')
+  const [customRepo, setCustomRepo] = useState('')
   const [prefix, setPrefix] = useState('')
-  const [quantized, setQuantized] = useState(false)
+  const [quantized, setQuantized] = useState(true)
   const [overwrite, setOverwrite] = useState(false)
-  const pairOk = /^[a-z]{2,3}-[a-z]{2,3}$/.test(pair.trim().toLowerCase())
+
+  const normPair = pair.trim().toLowerCase()
+  const pairOk = /^[a-z]{2,3}-[a-z]{2,3}$/.test(normPair)
+  const current = candidates?.find((c) => c.repo === selected) ?? null
+  const isCustom = selected === CUSTOM_REPO || (candidates !== null && candidates.length === 0) || searchError !== ''
+
+  const pick = useCallback((c: ModelRepoCandidate | null) => {
+    setSelected(c ? c.repo : CUSTOM_REPO)
+    setPrefix(c?.targetPrefix ?? '')
+    if (c) setQuantized(c.quantizedBytes != null)
+  }, [])
+
+  // Nhập cặp ngôn ngữ xong (dừng gõ 0,4 s) → server tìm repo phù hợp trên Hugging Face
+  useEffect(() => {
+    setCandidates(null)
+    setSearchError('')
+    setSelected('')
+    if (!pairOk) return
+    const ctrl = new AbortController()
+    const timer = window.setTimeout(async () => {
+      setSearching(true)
+      try {
+        const res = await adminApi.searchRepos(token, normPair, ctrl.signal)
+        setCandidates(res)
+        pick(res[0] ?? null)
+      } catch (e) {
+        if (!ctrl.signal.aborted) setSearchError(e instanceof Error ? e.message : String(e))
+      } finally {
+        if (!ctrl.signal.aborted) setSearching(false)
+      }
+    }, 400)
+    return () => {
+      ctrl.abort()
+      window.clearTimeout(timer)
+      setSearching(false)
+    }
+  }, [normPair, pairOk, token, pick])
+
+  const repo = isCustom ? customRepo.trim() : selected
+  const effectiveQuantized = current ? (current.fullBytes == null ? true : current.quantizedBytes == null ? false : quantized) : quantized
+  const canSubmit = pairOk && !disabled && !searching && (isCustom ? true : selected !== '')
 
   return (
     <form
@@ -356,10 +423,10 @@ function AddModelForm({ disabled, onStart }: { disabled: boolean; onStart: (r: M
       onSubmit={async (e) => {
         e.preventDefault()
         await onStart({
-          pair: pair.trim().toLowerCase(),
-          repo: repo.trim() || undefined,
+          pair: normPair,
+          repo: repo || undefined,
           targetPrefix: prefix.trim() || undefined,
-          quantized,
+          quantized: effectiveQuantized,
           overwrite,
         })
       }}
@@ -368,37 +435,88 @@ function AddModelForm({ disabled, onStart }: { disabled: boolean; onStart: (r: M
         <h2 className="font-semibold">{t('addModel')}</h2>
         <p className="text-xs text-slate-500">{t('addModelHint')}</p>
       </div>
-      <div className="grid gap-3 sm:grid-cols-[1fr_2fr_1fr]">
+      <div className="grid gap-3 sm:grid-cols-[1fr_3fr]">
         <label className="text-sm">
           <span className="mb-1 block text-slate-500">{t('pair')}</span>
-          <input className="input font-mono" value={pair} onChange={(e) => setPair(e.target.value)} placeholder="ja-en" />
+          <input className="input font-mono" value={pair} onChange={(e) => setPair(e.target.value)} placeholder="en-ja" />
         </label>
-        <label className="text-sm">
-          <span className="mb-1 block text-slate-500">
-            {t('hfRepo')} ({t('optional')})
-          </span>
-          <input
-            className="input font-mono"
-            value={repo}
-            onChange={(e) => setRepo(e.target.value)}
-            placeholder={`Xenova/opus-mt-${pairOk ? pair.trim().toLowerCase() : 'ja-en'}`}
-          />
-        </label>
-        <label className="text-sm">
+        <div className="text-sm">
+          <span className="mb-1 block text-slate-500">{t('hfRepo')}</span>
+          {!pairOk ? (
+            <div className="input text-slate-400">{t('enterPairFirst')}</div>
+          ) : searching ? (
+            <div className="input flex items-center gap-2 text-slate-500">
+              <Loader2 size={14} className="animate-spin" /> {t('searchingRepos')}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {candidates && candidates.length > 0 && (
+                <select
+                  className="input font-mono"
+                  value={selected}
+                  onChange={(e) => pick(candidates.find((c) => c.repo === e.target.value) ?? null)}
+                >
+                  {candidates.map((c) => (
+                    <option key={c.repo} value={c.repo}>
+                      {repoLabel(c, t)}
+                    </option>
+                  ))}
+                  <option value={CUSTOM_REPO}>{t('customRepo')}</option>
+                </select>
+              )}
+              {isCustom && (
+                <input
+                  className="input font-mono"
+                  value={customRepo}
+                  onChange={(e) => setCustomRepo(e.target.value)}
+                  placeholder={`Xenova/opus-mt-${normPair}`}
+                />
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {pairOk && !searching && (
+        <div className="space-y-1 text-xs">
+          {searchError && <div className="text-red-600">{searchError}</div>}
+          {candidates?.length === 0 && !searchError && <div className="text-amber-600">{t('noReposFound')}</div>}
+          {current?.recommended && (
+            <div className="text-green-600">
+              ★ {t('recommended')}
+              {current.note ? ` · ${current.note}` : ''}
+            </div>
+          )}
+          {current && !current.recommended && current.note && <div className="text-slate-500">{current.note}</div>}
+          {current?.warning && <div className="text-amber-600">⚠ {current.warning}</div>}
+        </div>
+      )}
+
+      <details className="text-sm" open={prefix !== ''}>
+        <summary className="cursor-pointer text-slate-500">{t('advanced')}</summary>
+        <label className="mt-2 block max-w-sm">
           <span className="mb-1 block text-slate-500">
             {t('targetPrefix')} ({t('optional')})
           </span>
           <input className="input font-mono" value={prefix} onChange={(e) => setPrefix(e.target.value)} placeholder=">>vie<<" />
+          <span className="mt-1 block text-xs text-slate-500">{t('targetPrefixHint')}</span>
         </label>
-      </div>
+      </details>
+
       <div className="flex flex-wrap items-center gap-4 text-sm">
         <label className="inline-flex items-center gap-2">
-          <input type="checkbox" checked={quantized} onChange={(e) => setQuantized(e.target.checked)} /> {t('quantized')}
+          <input
+            type="checkbox"
+            checked={effectiveQuantized}
+            disabled={current != null && (current.fullBytes == null || current.quantizedBytes == null)}
+            onChange={(e) => setQuantized(e.target.checked)}
+          />{' '}
+          {t('quantized')}
         </label>
         <label className="inline-flex items-center gap-2">
           <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} /> {t('overwrite')}
         </label>
-        <button className="btn-primary ml-auto" disabled={disabled || !pairOk}>
+        <button className="btn-primary ml-auto" disabled={!canSubmit}>
           <Download size={16} /> {t('downloadModel')}
         </button>
       </div>
@@ -459,7 +577,7 @@ function ModelsPanel({ token, onUnauthorized }: PanelProps) {
 
   return (
     <div className="space-y-4">
-      <AddModelForm disabled={anyActive} onStart={start} />
+      <AddModelForm token={token} disabled={anyActive} onStart={start} />
 
       {downloads.length > 0 && (
         <div className="space-y-2">

@@ -60,7 +60,24 @@ public static class AdminEndpoints
             return Results.Accepted($"/admin/models/downloads/{status.Id}", status);
         });
 
-        admin.MapGet("/models/downloads", (IModelInstaller installer) => Results.Ok(installer.List()));
+        admin.MapGet("/models/repos", async (string pair, IModelInstaller installer, CancellationToken ct) =>
+        {
+            try
+            {
+                return Results.Ok(await installer.SearchReposAsync(pair, ct));
+            }
+            catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or TaskCanceledException
+                                       && !ct.IsCancellationRequested)
+            {
+                // Lỗi mạng/TLS tới Hugging Face: trả lý do thật (kèm inner exception) thay vì 500 chung chung
+                var messages = new List<string>();
+                for (var e = ex; e is not null && messages.Count < 5; e = e.InnerException) messages.Add(e.Message);
+                return Results.Json(new { error = "Cannot search Hugging Face: " + string.Join(" → ", messages.Distinct()) },
+                    statusCode: StatusCodes.Status502BadGateway);
+            }
+        });
+
+        admin.MapGet("/models/downloads",(IModelInstaller installer) => Results.Ok(installer.List()));
 
         admin.MapGet("/models/downloads/{id}", (string id, IModelInstaller installer) =>
             installer.Get(id) is { } status ? Results.Ok(status) : Results.NotFound(new { error = "Download not found" }));
