@@ -9,3 +9,6 @@ src/NetTranslate.Api/wwwroot/
 src/NetTranslate.Api/data/
 models/*/
 !models/README.md
+publish/win/wwwroot/
+*.zip
+publish/
