@@ -22,4 +22,14 @@ public sealed class ModelOptions
 
     /// <summary>Số batch được chạy đồng thời trên toàn server. 0 = số CPU / 2.</summary>
     public int MaxConcurrency { get; set; }
+
+    /// <summary>Địa chỉ Hugging Face (hoặc mirror) dùng cho công cụ tải model trên trang quản trị.</summary>
+    public string HuggingFaceUrl { get; set; } = "https://huggingface.co";
+
+    /// <summary>Token Hugging Face (tuỳ chọn) cho repo private/gated.</summary>
+    public string? HuggingFaceToken { get; set; }
+
+    /// <summary>Đường dẫn tuyệt đối tới thư mục model (đường dẫn tương đối tính theo ContentRoot).</summary>
+    public string ResolvePath(string contentRootPath) =>
+        System.IO.Path.IsPathRooted(Path) ? Path : System.IO.Path.GetFullPath(System.IO.Path.Combine(contentRootPath, Path));
 }

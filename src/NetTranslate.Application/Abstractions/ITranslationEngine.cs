@@ -26,4 +26,7 @@ public interface ITranslationEngine
 
     /// <summary>Quét lại thư mục model (khi admin thêm model mới).</summary>
     void Reload();
+
+    /// <summary>Gỡ model trong thư mục con <paramref name="folderName"/> khỏi bộ nhớ (trước khi xoá/thay thư mục).</summary>
+    void Unload(string folderName);
 }

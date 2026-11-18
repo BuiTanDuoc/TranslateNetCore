@@ -38,9 +38,7 @@ public sealed class OnnxMarianTranslationEngine : ITranslationEngine, IDisposabl
         _options = options.Value;
         _logger = logger;
 
-        _modelsPath = System.IO.Path.IsPathRooted(_options.Path)
-            ? _options.Path
-            : System.IO.Path.Combine(environment.ContentRootPath, _options.Path);
+        _modelsPath = _options.ResolvePath(environment.ContentRootPath);
 
         var concurrency = _options.MaxConcurrency > 0
             ? _options.MaxConcurrency
@@ -106,6 +104,26 @@ public sealed class OnnxMarianTranslationEngine : ITranslationEngine, IDisposabl
             _entries = entries;
             _logger.LogInformation("Found {Count} translation models in {Path}: {Pairs}",
                 entries.Count, _modelsPath, string.Join(", ", entries.Keys.Select(k => $"{k.Item1}-{k.Item2}")));
+        }
+    }
+
+    public void Unload(string folderName)
+    {
+        lock (_reloadLock)
+        {
+            var entries = new Dictionary<(string, string), Entry>(_entries);
+            foreach (var (key, entry) in _entries)
+            {
+                if (!string.Equals(System.IO.Path.GetFileName(entry.Directory), folderName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                entries.Remove(key);
+                lock (entry.LoadLock)
+                {
+                    entry.Model?.Dispose();
+                    entry.Model = null;
+                }
+            }
+            _entries = entries;
         }
     }
 

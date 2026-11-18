@@ -53,6 +53,29 @@ public static class AdminEndpoints
             return Results.Ok(engine.GetModels());
         });
 
+        // Tải model từ Hugging Face: chạy nền, web hỏi tiến trình qua GET /admin/models/downloads
+        admin.MapPost("/models/download", (ModelDownloadRequest request, IModelInstaller installer) =>
+        {
+            var status = installer.Start(request);
+            return Results.Accepted($"/admin/models/downloads/{status.Id}", status);
+        });
+
+        admin.MapGet("/models/downloads", (IModelInstaller installer) => Results.Ok(installer.List()));
+
+        admin.MapGet("/models/downloads/{id}", (string id, IModelInstaller installer) =>
+            installer.Get(id) is { } status ? Results.Ok(status) : Results.NotFound(new { error = "Download not found" }));
+
+        admin.MapPost("/models/downloads/{id}/cancel", (string id, IModelInstaller installer) =>
+            installer.Cancel(id)
+                ? Results.Ok(installer.Get(id))
+                : Results.BadRequest(new { error = "Download is not running or cannot be cancelled now" }));
+
+        admin.MapDelete("/models/{name}", (string name, IModelInstaller installer, ITranslationEngine engine) =>
+        {
+            installer.Delete(name);
+            return Results.Ok(engine.GetModels());
+        });
+
         return app;
     }
 

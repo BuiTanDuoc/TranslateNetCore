@@ -23,6 +23,14 @@ public static class DependencyInjection
         services.AddSingleton<ITranslationEngine, OnnxMarianTranslationEngine>();
         services.AddSingleton<ILanguageDetector, HeuristicLanguageDetector>();
 
+        // Tải model từ Hugging Face (trang quản trị)
+        services.AddHttpClient(HuggingFaceModelInstaller.HttpClientName, c =>
+        {
+            c.Timeout = TimeSpan.FromSeconds(60);
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("NetTranslate/1.0");
+        });
+        services.AddSingleton<IModelInstaller, HuggingFaceModelInstaller>();
+
         // Bộ dịch tài liệu
         services.AddSingleton<HtmlDocumentTranslator>();
         services.AddSingleton<IHtmlTranslator>(sp => sp.GetRequiredService<HtmlDocumentTranslator>());

@@ -51,6 +51,39 @@ export interface ModelInfo {
   error: string | null
 }
 
+export type ModelDownloadState =
+  | 'queued'
+  | 'listing'
+  | 'downloading'
+  | 'validating'
+  | 'installing'
+  | 'done'
+  | 'failed'
+  | 'cancelled'
+
+export interface ModelDownloadStatus {
+  id: string
+  pair: string
+  repo: string
+  quantized: boolean
+  state: ModelDownloadState
+  message: string | null
+  error: string | null
+  totalBytes: number
+  downloadedBytes: number
+  startedAt: string
+  finishedAt: string | null
+  files: { name: string; size: number; downloaded: number; state: string }[]
+}
+
+export interface ModelDownloadRequest {
+  pair: string
+  repo?: string
+  quantized?: boolean
+  overwrite?: boolean
+  targetPrefix?: string
+}
+
 export class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -165,4 +198,20 @@ export const adminApi = {
 
   reloadModels: (token: string) =>
     request<ModelInfo[]>('/admin/models/reload', { method: 'POST', headers: adminApi.headers(token) }),
+
+  deleteModel: (token: string, name: string) =>
+    request<ModelInfo[]>(`/admin/models/${encodeURIComponent(name)}`, { method: 'DELETE', headers: adminApi.headers(token) }),
+
+  startDownload: (token: string, data: ModelDownloadRequest) =>
+    request<ModelDownloadStatus>('/admin/models/download', {
+      method: 'POST',
+      headers: adminApi.headers(token, true),
+      body: JSON.stringify(data),
+    }),
+
+  listDownloads: (token: string) =>
+    request<ModelDownloadStatus[]>('/admin/models/downloads', { headers: adminApi.headers(token) }),
+
+  cancelDownload: (token: string, id: string) =>
+    request<ModelDownloadStatus>(`/admin/models/downloads/${id}/cancel`, { method: 'POST', headers: adminApi.headers(token) }),
 }
