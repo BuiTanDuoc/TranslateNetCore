@@ -22,4 +22,48 @@
     <Folder Include="wwwroot\" />
   </ItemGroup>
 
+  <!-- Không đưa file chỉ dùng khi dev và dữ liệu runtime (DB, file tạm) vào bản publish -->
+  <ItemGroup>
+    <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
+    <Content Remove="data\**" />
+    <None Remove="data\**" />
+  </ItemGroup>
+
+  <!--
+    Build Web UI (web/, Vite) trước khi build bản publish. Vite xuất thẳng vào wwwroot.
+    Chạy khi: publish bằng CLI (dotnet publish) hoặc profile có BuildWebUi=true (VS 2026).
+    Bỏ qua bằng -p:SkipWebBuild=true.
+  -->
+  <PropertyGroup>
+    <WebUiRoot>$(MSBuildProjectDirectory)\..\..\web\</WebUiRoot>
+  </PropertyGroup>
+
+  <!-- npm ci chỉ chạy khi chưa có node_modules hoặc package-lock.json mới hơn lần cài trước -->
+  <Target Name="InstallWebUiPackages"
+          Inputs="$(WebUiRoot)package-lock.json"
+          Outputs="$(WebUiRoot)node_modules\.package-lock.json">
+    <Message Importance="high" Text="Web UI: npm ci" />
+    <Exec WorkingDirectory="$(WebUiRoot)" Command="npm ci" />
+  </Target>
+
+  <Target Name="BuildWebUi" BeforeTargets="BeforeBuild"
+          Condition="'$(SkipWebBuild)' != 'true' and ('$(BuildWebUi)' == 'true' or '$(_IsPublishing)' == 'true')">
+    <Exec Command="node --version" StandardOutputImportance="low" ContinueOnError="true">
+      <Output TaskParameter="ExitCode" PropertyName="_NodeExitCode" />
+    </Exec>
+    <Error Condition="'$(_NodeExitCode)' != '0'" Text="Cần cài Node.js để build Web UI (hoặc publish với -p:SkipWebBuild=true)." />
+
+    <CallTarget Targets="InstallWebUiPackages" />
+    <Message Importance="high" Text="Web UI: npm run build" />
+    <Exec WorkingDirectory="$(WebUiRoot)" Command="npm run build" />
+
+    <!-- Vite xoá rồi tạo lại wwwroot (tên file có hash), nên nạp lại danh sách file -->
+    <!-- (Remove theo glob không bắt được file đã bị xoá khỏi đĩa, nên lọc theo đường dẫn) -->
+    <ItemGroup>
+      <_WebUiOldContent Include="@(Content)" Condition="$([System.String]::Copy('%(Identity)').Replace('/', '\').StartsWith('wwwroot\'))" />
+      <Content Remove="@(_WebUiOldContent)" />
+      <Content Include="wwwroot\**" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
 </Project>
