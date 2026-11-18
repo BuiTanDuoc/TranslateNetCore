@@ -1,0 +1,71 @@
+@host = http://localhost:5000
+@adminToken = dev-admin-token
+
+### Danh sách ngôn ngữ
+GET {{host}}/languages
+
+### Dịch (JSON)
+POST {{host}}/translate
+Content-Type: application/json
+
+{
+  "q": "Hello world! How are you today?",
+  "source": "auto",
+  "target": "vi",
+  "format": "text"
+}
+
+### Dịch nhiều đoạn (q là mảng)
+POST {{host}}/translate
+Content-Type: application/json
+
+{
+  "q": ["Good morning", "See you tomorrow"],
+  "source": "en",
+  "target": "vi"
+}
+
+### Dịch HTML
+POST {{host}}/translate
+Content-Type: application/json
+
+{
+  "q": "<p>Hello <b>world</b>! <code>var x = 1;</code></p>",
+  "source": "en",
+  "target": "vi",
+  "format": "html"
+}
+
+### Dịch (form-urlencoded, giống client LibreTranslate)
+POST {{host}}/translate
+Content-Type: application/x-www-form-urlencoded
+
+q=Xin chào thế giới&source=vi&target=en
+
+### Nhận diện ngôn ngữ
+POST {{host}}/detect
+Content-Type: application/json
+
+{ "q": "Bonjour tout le monde" }
+
+### Cấu hình frontend
+GET {{host}}/frontend/settings
+
+### [Admin] Tạo API key
+POST {{host}}/admin/keys
+X-Admin-Token: {{adminToken}}
+Content-Type: application/json
+
+{ "name": "Test app", "reqLimit": 120, "charLimit": 10000 }
+
+### [Admin] Danh sách API key
+GET {{host}}/admin/keys
+X-Admin-Token: {{adminToken}}
+
+### [Admin] Model đã cài
+GET {{host}}/admin/models
+X-Admin-Token: {{adminToken}}
+
+### [Admin] Quét lại thư mục model
+POST {{host}}/admin/models/reload
+X-Admin-Token: {{adminToken}}

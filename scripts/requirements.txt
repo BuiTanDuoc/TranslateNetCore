@@ -1,0 +1,6 @@
+# Chỉ cần để tải/export model (không cần khi chạy server)
+optimum-onnx[onnxruntime]>=0.1.0
+transformers>=4.36,<4.58
+sentencepiece
+sacremoses
+torch

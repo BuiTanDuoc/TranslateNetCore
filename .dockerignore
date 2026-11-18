@@ -1,0 +1,10 @@
+**/bin
+**/obj
+**/node_modules
+web/dist
+src/NetTranslate.Api/wwwroot
+src/NetTranslate.Api/data
+models
+.git
+.vs
+.vscode

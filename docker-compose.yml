@@ -1,0 +1,19 @@
+services:
+  nettranslate:
+    build: .
+    image: nettranslate:latest
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./models:/app/models:ro
+      - nettranslate-data:/app/data
+    environment:
+      Admin__Token: "change-me"          # token cho trang /#/admin và /admin/*
+      Translate__CharLimit: "5000"
+      Translate__ReqLimit: "60"
+      Translate__RequireApiKey: "false"
+      Translate__DefaultTarget: "vi"
+    restart: unless-stopped
+
+volumes:
+  nettranslate-data:

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>NetTranslate.Api</RootNamespace>
+    <UserSecretsId>nettranslate-api</UserSecretsId>
+    <!-- Thư mục build của React (web/dist) được copy vào wwwroot khi publish, xem README -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetTranslate.Infrastructure\NetTranslate.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.0" />
+    <!-- Giữ Microsoft.OpenApi ở 2.x: bản 3.x làm hỏng bộ sinh mã XML comment của ASP.NET Core 10; 2.0.0 có lỗ hổng GHSA-v5pm-xwqc-g5wc -->
+    <PackageReference Include="Microsoft.OpenApi" Version="2.13.0" />
+    <PackageReference Include="Scalar.AspNetCore" Version="2.*" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="wwwroot\" />
+  </ItemGroup>
+
+</Project>

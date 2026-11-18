@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/NetTranslate.Domain/NetTranslate.Domain.csproj" />
+    <Project Path="src/NetTranslate.Application/NetTranslate.Application.csproj" />
+    <Project Path="src/NetTranslate.Infrastructure/NetTranslate.Infrastructure.csproj" />
+    <Project Path="src/NetTranslate.Api/NetTranslate.Api.csproj" />
+  </Folder>
+</Solution>
