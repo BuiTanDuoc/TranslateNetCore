@@ -32,6 +32,28 @@ public sealed class TranslateOptions
     /// <summary>Ngôn ngữ trung gian khi không có model dịch trực tiếp.</summary>
     public string PivotLanguage { get; set; } = "en";
 
+    /// <summary>
+    /// Giữ nguyên biển số xe, URL, email, số điện thoại, mã, ngày giờ... khi dịch
+    /// (thay bằng placeholder trước khi đưa vào model, dịch xong trả lại).
+    /// </summary>
+    public bool ProtectEntities { get; set; } = true;
+
+    /// <summary>
+    /// Các regex nhận diện thực thể cần giữ nguyên. Để trống = dùng bộ mặc định
+    /// (EntityProtector.DefaultPatterns). Nếu khai báo thì thay hoàn toàn bộ mặc định.
+    /// </summary>
+    public string[]? ProtectedPatterns { get; set; }
+
+    /// <summary>
+    /// Nhận diện tên người, địa danh trong câu tiếng Việt (theo quy tắc: họ phổ biến, chữ viết hoa,
+    /// phường/quận/đường...) và giữ nguyên khi dịch. Đơn vị hành chính được dịch sang tiếng Anh
+    /// ("phường Bình Trị Đông" → "Binh Tri Dong Ward").
+    /// </summary>
+    public bool DetectNames { get; set; } = true;
+
+    /// <summary>Giữ dấu tiếng Việt trong tên riêng khi dịch sang ngôn ngữ khác (mặc định bỏ dấu).</summary>
+    public bool KeepNameDiacritics { get; set; }
+
     public string DefaultSource { get; set; } = "auto";
     public string DefaultTarget { get; set; } = "vi";
 

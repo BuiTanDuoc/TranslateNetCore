@@ -25,6 +25,10 @@ public sealed class TranslationService(
     public const string AutoSource = "auto";
 
     private readonly TranslateOptions _options = options.Value;
+    private readonly EntityProtector? _protector =
+        options.Value.ProtectEntities
+            ? new EntityProtector(options.Value.ProtectedPatterns, options.Value.DetectNames, options.Value.KeepNameDiacritics)
+            : null;
 
     // ----------------------------------------------------------------------------- Languages
 
@@ -192,12 +196,71 @@ public sealed class TranslationService(
         foreach (var step in route)
         {
             logger.LogDebug("Translating {Count} sentences {Source}->{Target}", current.Count, step.Source, step.Target);
-            current = await engine.TranslateAsync(step.Source, step.Target, current, cancellationToken);
+            current = _protector is null
+                ? await engine.TranslateAsync(step.Source, step.Target, current, cancellationToken)
+                : await TranslateProtectedAsync(step, current, _protector, cancellationToken);
         }
 
         for (var i = 0; i < sentences.Count; i++)
             map[sentences[i]] = current[i];
         return map;
+    }
+
+    /// <summary>
+    /// Dịch một bước, giữ nguyên các thực thể (biển số, URL, email...). Câu nào model làm mất
+    /// placeholder thì dịch lại với kiểu placeholder khác; hết kiểu thì dịch như bình thường.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> TranslateProtectedAsync(
+        LanguagePair step,
+        IReadOnlyList<string> sentences,
+        EntityProtector protector,
+        CancellationToken cancellationToken)
+    {
+        var results = new string?[sentences.Count];
+        var pending = Enumerable.Range(0, sentences.Count).ToList();
+
+        for (var style = 0; style < EntityProtector.StyleCount && pending.Count > 0; style++)
+        {
+            var batch = new List<(int Index, string Masked, IReadOnlyList<(string Value, EntityKind Kind)> Entities)>();
+            var skipped = new List<int>();
+            foreach (var i in pending)
+            {
+                var masked = protector.Mask(sentences[i], style, step.Source, out var entities);
+                if (masked is null) { skipped.Add(i); continue; }
+                if (entities.Count > 0 && EntityProtector.HasNothingToTranslate(masked, style, entities.Count))
+                {
+                    results[i] = protector.Unmask(masked, style, entities, step.Target) ?? sentences[i];
+                    continue;
+                }
+                // Lần đầu dịch luôn cả câu không có thực thể; các lần sau chỉ còn câu có thực thể
+                batch.Add((i, masked, entities));
+            }
+
+            var translated = batch.Count == 0
+                ? []
+                : await engine.TranslateAsync(step.Source, step.Target, batch.Select(b => b.Masked).ToList(), cancellationToken);
+
+            pending = skipped;
+            for (var k = 0; k < batch.Count; k++)
+            {
+                var (i, _, entities) = batch[k];
+                var restored = entities.Count == 0 ? translated[k] : protector.Unmask(translated[k], style, entities, step.Target);
+                if (restored is not null) results[i] = restored;
+                else pending.Add(i);
+            }
+
+            if (pending.Count > 0)
+                logger.LogDebug("Entity placeholders lost in {Count} sentences (style {Style}), retrying", pending.Count, style);
+        }
+
+        // Không kiểu placeholder nào giữ được → dịch nguyên câu như trước đây
+        if (pending.Count > 0)
+        {
+            var fallback = await engine.TranslateAsync(step.Source, step.Target, pending.Select(i => sentences[i]).ToList(), cancellationToken);
+            for (var k = 0; k < pending.Count; k++) results[pending[k]] = fallback[k];
+        }
+
+        return results!;
     }
 
     /// <summary>Đường dịch: trực tiếp, hoặc qua ngôn ngữ trung gian (mặc định en) như Argos Translate.</summary>
